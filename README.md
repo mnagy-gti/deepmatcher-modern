@@ -34,7 +34,7 @@ All 43 upstream tests pass, ported from nose to pytest.
 ## Install
 
 ```bash
-pip install "deepmatcher-modern @ git+https://github.com/<owner>/deepmatcher-modern"
+pip install "deepmatcher-modern @ git+https://github.com/mnagy-gti/deepmatcher-modern"
 ```
 
 Requires Python ≥ 3.10 and torch ≥ 2.4. Install torch first from the index that matches
