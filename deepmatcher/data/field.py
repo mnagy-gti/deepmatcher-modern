@@ -10,8 +10,8 @@ import six
 
 import fasttext
 import torch
-from torchtext.legacy import data, vocab
-from torchtext.utils import download_from_url
+from .._torchtext import data, vocab
+from .._torchtext.utils import download_from_url
 from urllib.request import urlretrieve
 
 logger = logging.getLogger(__name__)

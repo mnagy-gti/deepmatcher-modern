@@ -2,16 +2,16 @@ import io
 import os
 import shutil
 import unittest
-from test import test_dir_path
+from . import test_dir_path
 
 import pandas as pd
-from nose.tools import *
+from ._compat import raises
 
 import torch
 from deepmatcher.data.dataset import *
 from deepmatcher.data.field import FastText, MatchingField
 from deepmatcher.data.process import _make_fields, process
-from torchtext.utils import unicode_csv_reader
+from deepmatcher._torchtext.utils import unicode_csv_reader
 from urllib.parse import urljoin
 from urllib.request import pathname2url
 

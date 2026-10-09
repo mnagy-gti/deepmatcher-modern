@@ -1,5 +1,3 @@
-import pdb
-
 import six
 
 import deepmatcher as dm
@@ -42,6 +40,6 @@ def check_nan(*values):
     for value in values:
         if isinstance(value, AttrTensor):
             value = value.data
-        if isinstance(value, torch.Tensor) and (value != value).any():
-            print('NaN detected!!!')
-            pdb.set_trace()
+        if isinstance(value, torch.Tensor) and torch.isnan(value).any():
+            # Used to drop into pdb, which hangs unattended batch jobs.
+            raise FloatingPointError('NaN detected in deepmatcher module output/gradient')

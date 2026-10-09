@@ -6,7 +6,7 @@ from timeit import default_timer as timer
 
 import six
 
-from torchtext.utils import unicode_csv_reader
+from .._torchtext.utils import unicode_csv_reader
 
 from .dataset import MatchingDataset
 from .field import MatchingField

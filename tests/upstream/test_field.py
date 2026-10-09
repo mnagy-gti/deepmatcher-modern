@@ -2,15 +2,15 @@ import os
 import shutil
 import unittest
 from collections import Counter
-from test import test_dir_path
+from . import test_dir_path
 
-from nose.tools import *
+from ._compat import raises
 
 import torch
 from deepmatcher.data.dataset import MatchingDataset
 from deepmatcher.data.field import (FastText, FastTextBinary, MatchingField,
                                     MatchingVocab, reset_vector_cache)
-from torchtext.vocab import Vectors
+from deepmatcher._torchtext.vocab import Vectors
 from urllib.parse import urljoin
 from urllib.request import pathname2url
 

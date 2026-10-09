@@ -14,9 +14,9 @@ from sklearn.decomposition import TruncatedSVD
 
 import torch
 import torch.nn as nn
-from torchtext.legacy import data
-from torchtext.legacy.data.example import Example
-from torchtext.utils import unicode_csv_reader
+from .._torchtext import data
+from .._torchtext.data.example import Example
+from .._torchtext.utils import unicode_csv_reader
 
 from ..models.modules import NoMeta, Pool
 from .field import MatchingField
@@ -417,7 +417,8 @@ class MatchingDataset(data.Dataset):
             functions) these arguments cannot be serialized and hence will not be checked
             for modifications.
         """
-        cached_data = torch.load(cachefile)
+        # Our own dataset cache (pickled Examples), not just tensors.
+        cached_data = torch.load(cachefile, weights_only=False)
         cache_stale_cause = set()
 
         if datafiles != cached_data['datafiles']:

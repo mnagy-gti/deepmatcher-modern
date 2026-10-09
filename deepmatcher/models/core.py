@@ -1,6 +1,6 @@
 import copy
 import logging
-from collections import Mapping
+from collections.abc import Mapping
 
 import dill
 import six
@@ -464,7 +464,10 @@ class MatchingModel(nn.Module):
         Args:
             path (string): The path to load the model state from.
         """
-        state = torch.load(path, pickle_module=dill, map_location=map_location)
+        # The checkpoint pickles training metadata (vocabularies, Bunch, ...), which
+        # torch>=2.6's default weights_only=True refuses. Only load trusted files.
+        state = torch.load(path, pickle_module=dill, map_location=map_location,
+                           weights_only=False)
         for k, v in six.iteritems(state):
             if k != 'model':
                 self._train_buffers.add(k)

@@ -2,13 +2,13 @@ import io
 import os
 import shutil
 import unittest
-from test import test_dir_path
+from . import test_dir_path
 
-from nose.tools import *
+from ._compat import raises
 
 from deepmatcher.data.field import FastText
 from deepmatcher.data.process import _check_header, _make_fields, process, process_unlabeled
-from torchtext.utils import unicode_csv_reader
+from deepmatcher._torchtext.utils import unicode_csv_reader
 from deepmatcher import MatchingModel
 from urllib.parse import urljoin
 from urllib.request import pathname2url

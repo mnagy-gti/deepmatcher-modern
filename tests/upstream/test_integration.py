@@ -1,4 +1,4 @@
-from nose.tools import *
+from ._compat import raises
 
 import io
 import os
@@ -14,7 +14,7 @@ from deepmatcher import MatchingModel
 from urllib.parse import urljoin
 from urllib.request import pathname2url
 
-from test import test_dir_path
+from . import test_dir_path
 
 class ModelTrainSaveLoadTest(unittest.TestCase):
     def setUp(self):

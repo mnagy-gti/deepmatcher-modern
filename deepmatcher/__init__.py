@@ -24,8 +24,9 @@ sys.modules['deepmatcher.modules'] = modules
 
 warnings.filterwarnings('always', module='deepmatcher')
 
-logging.basicConfig()
-logging.getLogger('deepmatcher.data.field').setLevel(logging.INFO)
+# Libraries must not configure the root logger (the old basicConfig() here
+# silently swallowed the host application's own logging setup).
+logging.getLogger('deepmatcher').addHandler(logging.NullHandler())
 
 
 def process(*args, **kwargs):
@@ -47,9 +48,14 @@ __all__ = [
 _check_nan = True
 
 
+# NaN checks hook every module and sync the device after each forward pass;
+# they never change outputs, so inference turns them off (see runtime.py).
+# They take effect for modules initialized after the call.
 def disable_nan_checks():
+    global _check_nan
     _check_nan = False
 
 
 def enable_nan_checks():
+    global _check_nan
     _check_nan = True

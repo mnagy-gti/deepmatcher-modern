@@ -1,4 +1,4 @@
-from nose.tools import *
+from ._compat import raises
 
 import os
 import torch
@@ -8,7 +8,7 @@ from deepmatcher.data.field import FastText
 from deepmatcher.data.process import process
 from deepmatcher.data.iterator import MatchingIterator
 
-from test import test_dir_path
+from . import test_dir_path
 from urllib.parse import urljoin
 from urllib.request import pathname2url
 

@@ -226,12 +226,14 @@ class Runner(object):
             else:
                 scores = [0] * 4
 
-            cum_stats.update(float(loss), *scores)
-            stats.update(float(loss), *scores)
+            loss_value = float(loss.detach()) if torch.is_tensor(loss) else float(loss)
+            cum_stats.update(loss_value, *scores)
+            stats.update(loss_value, *scores)
 
             if return_predictions:
-                for idx, id in enumerate(getattr(batch, id_attr)):
-                    predictions.append((id, float(output[idx, 1].exp())))
+                # One host transfer per batch (per-element float() syncs CUDA/MPS each row).
+                match_probs = output[:, 1].detach().exp().float().cpu().tolist()
+                predictions.extend(zip(getattr(batch, id_attr), match_probs))
 
             if (batch_idx + 1) % log_freq == 0:
                 if progress_style == 'log':

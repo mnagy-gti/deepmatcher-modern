@@ -115,7 +115,9 @@ class LazyModule(nn.Module):
 
             if dm._check_nan:
                 self.register_forward_hook(LazyModule._check_nan_hook)
-                self.register_backward_hook(LazyModule._check_nan_hook)
+                # Module-level backward hooks are deprecated for modules taking
+                # non-Tensor inputs (AttrTensor); hook the output tensors instead.
+                self.register_forward_hook(LazyModule._check_nan_grad_hook)
 
             self._initialized = True
 
@@ -150,6 +152,14 @@ class LazyModule(nn.Module):
     @staticmethod
     def _check_nan_hook(m, *tensors):
         _utils.check_nan(*tensors)
+
+    @staticmethod
+    def _check_nan_grad_hook(m, inputs, output):
+        outputs = output if isinstance(output, (tuple, list)) else (output,)
+        for out in outputs:
+            tensor = out.data if isinstance(out, AttrTensor) else out
+            if isinstance(tensor, torch.Tensor) and tensor.requires_grad:
+                tensor.register_hook(_utils.check_nan)
 
     def _init(self):
         pass

@@ -47,15 +47,15 @@ class AttrTensor(AttrTensor_):
             word_probs = None
             if 'word_probs' in train_info.metadata:
                 raw_word_probs = train_info.metadata['word_probs'][name]
+                # Look ids up from one host copy: iterating a CUDA/MPS tensor
+                # element-wise forces a device sync per token.
                 word_probs = torch.Tensor(
-                    [[raw_word_probs[int(w)] for w in b] for b in data.data])
-                if data.is_cuda:
-                    word_probs = word_probs.cuda()
+                    [[raw_word_probs[w] for w in b] for b in data.tolist()])
+                word_probs = word_probs.to(data.device)
             pc = None
             if 'pc' in train_info.metadata:
                 pc = torch.Tensor(train_info.metadata['pc'][name])
-                if data.is_cuda:
-                    pc = pc.cuda()
+                pc = pc.to(data.device)
             return AttrTensor(data, lengths, word_probs, pc)
 
     @staticmethod

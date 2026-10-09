@@ -43,7 +43,12 @@ class SoftNLLLoss(nn.NLLLoss):
 
         assert label_smoothing >= 0.0 and label_smoothing <= 1.0
 
-        self.criterion = nn.KLDivLoss(**kwargs)
+        # torch will change KLDivLoss(reduction='mean') to mean 'batchmean'; keep the
+        # original element-wise mean the models were trained with explicitly.
+        reduction = kwargs.pop('reduction', 'mean')
+        self._elementwise_mean = reduction == 'mean'
+        self.criterion = nn.KLDivLoss(
+            reduction='sum' if self._elementwise_mean else reduction, **kwargs)
 
     def forward(self, input, target):
         one_hot = torch.zeros_like(input)
@@ -53,7 +58,8 @@ class SoftNLLLoss(nn.NLLLoss):
         if self.weight is not None:
             one_hot.mul_(self.weight)
 
-        return self.criterion(input, one_hot)
+        loss = self.criterion(input, one_hot)
+        return loss / input.numel() if self._elementwise_mean else loss
 
 
 # This class is based on the Optimizer class in the ONMT-py project.
