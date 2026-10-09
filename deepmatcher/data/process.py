@@ -77,11 +77,23 @@ def _make_fields(header, id_attr, label_attr, ignore_columns, lower, tokenize,
     return fields
 
 
-def _maybe_download_nltk_data():
+_NLTK_RESOURCES = {
+    'perluniprops': 'misc/perluniprops',
+    'nonbreaking_prefixes': 'corpora/nonbreaking_prefixes',
+    'punkt': 'tokenizers/punkt',
+    'punkt_tab': 'tokenizers/punkt_tab',  # what word_tokenize loads on nltk >= 3.8.2
+}
+
+
+def _maybe_download_nltk_data(names=tuple(_NLTK_RESOURCES)):
+    # Only fetch what is missing: unconditional downloads hit the network on every
+    # call and fail noisily on offline machines that already have the data.
     import nltk
-    nltk.download('perluniprops', quiet=True)
-    nltk.download('nonbreaking_prefixes', quiet=True)
-    nltk.download('punkt', quiet=True)
+    for name in names:
+        try:
+            nltk.data.find(_NLTK_RESOURCES[name])
+        except LookupError:
+            nltk.download(name, quiet=True)
 
 
 def process(path,
@@ -245,6 +257,8 @@ def process_unlabeled(path, trained_model, ignore_columns=None):
         header = next(unicode_csv_reader(f))
 
     train_info = trained_model.meta
+    if train_info.tokenize == 'nltk':
+        _maybe_download_nltk_data(('punkt', 'punkt_tab'))
     if ignore_columns is None:
         ignore_columns = train_info.ignore_columns
     column_naming = dict(train_info.column_naming)

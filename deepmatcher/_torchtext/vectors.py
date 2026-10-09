@@ -65,8 +65,9 @@ class Vectors(object):
             return self.unk_init(torch.Tensor(self.dim))
 
     def cache(self, name, cache, url=None, max_vectors=None):
-        import ssl
-        ssl._create_default_https_context = ssl._create_unverified_context
+        # torchtext 0.11.2 disabled TLS certificate verification for the whole
+        # process here (ssl._create_default_https_context = _create_unverified_context).
+        # Removed: downloads must verify certificates.
         if os.path.isfile(name):
             path = name
             if max_vectors:
