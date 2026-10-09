@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepmatcher-modern"
+version = "0.2.0"
+description = "DeepMatcher entity matching, ported to current PyTorch (CUDA / Apple Metal / CPU), with safetensors model files and reduced-precision inference"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE", "deepmatcher/_torchtext/LICENSE"]
+requires-python = ">=3.10"
+authors = [
+  { name = "Sidharth Mudgal" },
+  { name = "Han Li" },
+  { name = "Government Transparency Institute" },
+]
+dependencies = [
+  "torch>=2.4",
+  "numpy>=1.24",
+  "pandas>=1.5",
+  "scikit-learn>=1.2",
+  "nltk>=3.8",
+  "fasttext>=0.9.3",
+  "dill>=0.3.6",
+  "six",
+  "tqdm",
+  "pyprind",
+  "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+deepmatcher-convert = "deepmatcher.convert:main"
+
+[tool.setuptools.packages.find]
+include = ["deepmatcher*"]
+
+[tool.setuptools.package-data]
+"deepmatcher._torchtext" = ["LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:nltk.*"]
