@@ -93,6 +93,7 @@ class MatchingDataset(data.Dataset):
         canonical_text_fields (list): A list of all canonical attribute names.
         label_field (str): Name of the column containing labels.
         id_field (str): Name of the column containing tuple pair ids.
+        weight_field (str): Name of the optional per-example loss weight column, or None.
     """
 
     class CacheStaleException(Exception):
@@ -202,6 +203,7 @@ class MatchingDataset(data.Dataset):
         self.all_text_fields = self.all_left_fields + self.all_right_fields
         self.label_field = self.column_naming['label']
         self.id_field = self.column_naming['id']
+        self.weight_field = self.column_naming.get('weight')
 
     def compute_metadata(self, pca=False):
         r"""Computes metadata about the dataset.

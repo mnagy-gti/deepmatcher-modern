@@ -162,3 +162,36 @@ class Hybrid(dm.AttrSummarizer):
             word_comparator=word_comparator,
             word_aggregator=word_aggregator,
             hidden_size=hidden_size)
+
+
+class HybridTransformer(Hybrid):
+    r"""The Hybrid model with transformer components instead of GRU and decomposable
+    attention: a pre-norm multi-head self-attention contextualizer
+    (:class:`~deepmatcher.word_contextualizers.TransformerSelfAttention`) and a multi-head
+    cross-attention comparator
+    (:class:`~deepmatcher.word_comparators.MultiHeadCrossAttention`). The aggregator is
+    still 'attention-with-rnn'. String name: ``'hybrid-transformer'``.
+
+    Args:
+        heads (int): heads for both attention modules; must divide the hidden size
+            (the embedding size when `hidden_size` is None).
+        dropout (float): dropout inside both attention modules.
+        Other arguments as in :class:`Hybrid`; a given module replaces the default.
+    """
+
+    def _init(self,
+              word_contextualizer=None,
+              word_comparator=None,
+              word_aggregator=None,
+              hidden_size=None,
+              heads=4,
+              dropout=0.1):
+        word_contextualizer = word_contextualizer or dm.word_contextualizers.\
+            TransformerSelfAttention(heads=heads, hidden_size=hidden_size, dropout=dropout)
+        word_comparator = word_comparator or dm.word_comparators.MultiHeadCrossAttention(
+            heads=heads, hidden_size=hidden_size, dropout=dropout)
+        super(HybridTransformer, self)._init(
+            word_contextualizer=word_contextualizer,
+            word_comparator=word_comparator,
+            word_aggregator=word_aggregator,
+            hidden_size=hidden_size)

@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from . import _utils
+from ..batch import AttrTensor
 from ..data import MatchingDataset, MatchingIterator
 from ..runner import Runner
 from ..utils import Bunch, tally_parameters
@@ -98,6 +99,9 @@ class MatchingModel(nn.Module):
         self.classifier = classifier
 
         self.hidden_size = hidden_size
+        # Training-time regularizer (see TrainConfig.token_dropout); not a constructor
+        # argument so that it never has to match a loaded checkpoint.
+        self.token_dropout = 0.0
         self._train_buffers = set()
         self._initialized = False
 
@@ -109,6 +113,12 @@ class MatchingModel(nn.Module):
             sort_in_buckets=None)
 
         Train the model using the specified training set.
+
+        This is the original training loop, unchanged. Extra keyword arguments that it
+        does not know are ignored without a warning; in particular a
+        ``grad_accumulation=`` argument has **no effect** here. For gradient
+        accumulation, schedules, resume, mixed precision and more, use
+        :func:`deepmatcher.training.train`.
 
         Args:
             train_dataset (:class:`~deepmatcher.data.MatchingDataset`):
@@ -361,6 +371,48 @@ class MatchingModel(nn.Module):
         logger.info('Successfully initialized MatchingModel with {:d} trainable '
                     'parameters.'.format(tally_parameters(self)))
 
+    def rebind(self, train_dataset):
+        r"""Point an initialized model at a different training set (for fine-tuning).
+
+        The networks keep their trained weights. What is replaced is everything that
+        is derived from the training data: the embedding tables (rebuilt from the new
+        vocabulary, so tokens that only occur in the new data get their pretrained
+        vector instead of ``<unk>``), the metadata used while batching (SIF word
+        probabilities and principal components, which are the *new* set's statistics)
+        and the metadata stored in checkpoints. The set of attributes must match, and
+        the embedding size must too, because the networks were sized from it.
+
+        Args:
+            train_dataset (:class:`~deepmatcher.data.MatchingDataset`):
+                The new training set obtained using :func:`deepmatcher.data.process`.
+        """
+        if not self._initialized:
+            raise RuntimeError('rebind() needs an initialized model; use initialize().')
+        if (list(train_dataset.canonical_text_fields) !=
+                list(self.meta.canonical_text_fields)):
+            raise ValueError('attributes differ: model has {}, dataset has {}'.format(
+                list(self.meta.canonical_text_fields),
+                list(train_dataset.canonical_text_fields)))
+        old_dim = self.embed[self.meta.all_text_fields[0]].module.weight.shape[1]
+        new_dim = next(iter(train_dataset.vocabs.values())).vectors.shape[1]
+        if old_dim != new_dim:
+            raise ValueError('embedding size differs: model {} vs dataset {}'.format(
+                old_dim, new_dim))
+
+        meta = Bunch(**train_dataset.__dict__)
+        if hasattr(meta, 'fields'):
+            del meta.fields
+            del meta.examples
+        self.meta = meta
+        self.state_meta = Bunch(**meta.__dict__)
+        del self.state_meta.metadata
+        self._reset_embeddings(train_dataset.vocabs)
+        # An init batch is stored in checkpoints so they can be re-initialized; it must
+        # use the new vocabulary ids.
+        run_iter = MatchingIterator(train_dataset, train_dataset, train=False, batch_size=4,
+                                    device='cpu', sort_in_buckets=False)
+        self.state_meta.init_batch = next(run_iter.__iter__())
+
     def _reset_embeddings(self, vocabs):
         self.embed = dm.modules.ModuleMap()
         field_vectors = {}
@@ -416,6 +468,8 @@ class MatchingModel(nn.Module):
         embeddings = {}
         for name in self.meta.all_text_fields:
             attr_input = getattr(input, name)
+            if self.training and getattr(self, 'token_dropout', 0.0) > 0:
+                attr_input = self._drop_tokens(name, attr_input)
             embeddings[name] = self.embed[name](attr_input)
 
         attr_comparisons = []
@@ -435,6 +489,36 @@ class MatchingModel(nn.Module):
 
         entity_comparison = self.attr_merge(*attr_comparisons)
         return self.classifier(entity_comparison)
+
+    def _drop_tokens(self, name, attr):
+        r"""Randomly delete tokens of one attribute (training-time regularizer).
+
+        Each token is removed with probability ``token_dropout``; the sequence is
+        compacted, lengths and SIF word probabilities follow. The first and last token
+        (the ``<<<`` / ``>>>`` markers) are always kept, so no value becomes empty.
+        Needs sequence lengths; attributes without them are left untouched.
+        """
+        if attr.lengths is None:
+            return attr
+        data, lengths = attr.data, attr.lengths
+        batch, width = data.shape
+        pos = torch.arange(width, device=data.device).unsqueeze(0)
+        valid = pos < lengths.unsqueeze(1)
+        keep = (torch.rand(batch, width, device=data.device) >= self.token_dropout)
+        keep = (keep | (pos == 0) | (pos == lengths.unsqueeze(1) - 1)) & valid
+        # Stable sort moves kept tokens to the front, preserving their order.
+        order = torch.sort((~keep).to(torch.uint8), dim=1, stable=True)[1]
+        new_lengths = keep.sum(dim=1)
+        new_width = int(new_lengths.max())
+        order = order[:, :new_width]
+        pad_id = self.meta.vocabs[name].stoi['<pad>']
+        live = pos[:, :new_width] < new_lengths.unsqueeze(1)
+        new_data = torch.where(live, data.gather(1, order), torch.full_like(order, pad_id))
+        word_probs = attr.word_probs
+        if word_probs is not None:
+            word_probs = torch.where(live, word_probs.gather(1, order),
+                                     torch.zeros_like(word_probs[:, :new_width]))
+        return AttrTensor(new_data, new_lengths.to(lengths.dtype), word_probs, attr.pc)
 
     def _register_train_buffer(self, name, value):
         r"""Adds a persistent buffer containing training metadata to the module.
@@ -569,7 +653,8 @@ class AttrSummarizer(dm.modules.LazyModule):
                 'sif': dm.attr_summarizers.SIF,
                 'rnn': dm.attr_summarizers.RNN,
                 'attention': dm.attr_summarizers.Attention,
-                'hybrid': dm.attr_summarizers.Hybrid
+                'hybrid': dm.attr_summarizers.Hybrid,
+                'hybrid-transformer': dm.attr_summarizers.HybridTransformer
             }
             if arg in type_map:
                 asr = type_map[arg](**kwargs)
@@ -625,6 +710,8 @@ class WordContextualizer(dm.modules.LazyModule):
                 wc = dm.word_contextualizers.RNN(arg, **kwargs)
             elif arg == 'self-attention':
                 wc = dm.word_contextualizers.SelfAttention(**kwargs)
+            elif arg in ('transformer', 'transformer-encoder'):
+                wc = dm.word_contextualizers.TransformerSelfAttention(**kwargs)
             else:
                 raise ValueError('Unknown Word Contextualizer name.')
         else:
@@ -663,7 +750,9 @@ class WordComparator(dm.modules.LazyModule):
         """
         if isinstance(arg, six.string_types):
             parts = arg.split('-')
-            if (parts[1] == 'attention' and
+            if arg == 'multi-head-attention':
+                wc = dm.word_comparators.MultiHeadCrossAttention(**kwargs)
+            elif (len(parts) > 1 and parts[1] == 'attention' and
                     dm.modules.AlignmentNetwork.supports_style(parts[0])):
                 wc = dm.word_comparators.Attention(alignment_network=parts[0], **kwargs)
             else:

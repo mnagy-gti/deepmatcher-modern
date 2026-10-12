@@ -1,8 +1,11 @@
+import math
+
 import six
 
 import deepmatcher as dm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 
 from . import _utils
@@ -179,3 +182,118 @@ class SelfAttention(dm.WordContextualizer):
         final_output = self.bypass_network(output, input)
 
         return AttrTensor.from_old_metadata(final_output, input_with_meta)
+
+
+def sinusoidal_positions(length, dim, device, dtype):
+    """Fixed sin/cos position encodings (Vaswani et al., 2017), shape (length, dim).
+
+    Computed on the fly rather than stored as a buffer so checkpoints carry no extra
+    state and any sequence length works."""
+    position = torch.arange(length, device=device, dtype=torch.float32).unsqueeze(1)
+    freq = torch.exp(torch.arange(0, dim, 2, device=device, dtype=torch.float32) *
+                     (-math.log(10000.0) / dim))
+    pe = torch.zeros(length, dim, device=device, dtype=torch.float32)
+    pe[:, 0::2] = torch.sin(position * freq)
+    pe[:, 1::2] = torch.cos(position * freq)[:, :dim // 2]
+    return pe.to(dtype)
+
+
+def key_padding_mask(lengths, length, device):
+    """Boolean (batch, length) mask, True where a token is real (not padding).
+
+    A row with no real token (empty value) is unmasked entirely so softmax cannot
+    produce NaN; its output is meaningless anyway and is never selected by pooling."""
+    if lengths is None:
+        return None
+    mask = torch.arange(length, device=device).unsqueeze(0) < lengths.unsqueeze(1)
+    return mask | ~mask.any(dim=1, keepdim=True)
+
+
+class _PreNormBlock(nn.Module):
+    """One pre-norm transformer encoder layer: ``x + Attn(LN(x))`` then ``x + FFN(LN(x))``.
+
+    Hand-rolled on :func:`torch.nn.functional.scaled_dot_product_attention` (explicit
+    boolean key mask, no fused nested-tensor fast path) so eager CPU/MPS/CUDA behave
+    the same."""
+
+    def __init__(self, dim, heads, ffn_dim, dropout):
+        super(_PreNormBlock, self).__init__()
+        self.heads = heads
+        self.dropout = dropout
+        self.norm1 = nn.LayerNorm(dim)
+        self.qkv = nn.Linear(dim, 3 * dim)
+        self.out = nn.Linear(dim, dim)
+        self.norm2 = nn.LayerNorm(dim)
+        self.ffn = nn.Sequential(nn.Linear(dim, ffn_dim), nn.GELU(), nn.Dropout(dropout),
+                                 nn.Linear(ffn_dim, dim))
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x, mask):
+        batch, length, dim = x.shape
+        qkv = self.qkv(self.norm1(x)).view(batch, length, 3, self.heads, dim // self.heads)
+        q, k, v = qkv.permute(2, 0, 3, 1, 4)  # each: batch x heads x length x head_dim
+        attn = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=None if mask is None else mask[:, None, None, :],
+            dropout_p=self.dropout if self.training else 0.0)
+        attn = attn.transpose(1, 2).reshape(batch, length, dim)
+        x = x + self.drop(self.out(attn))
+        return x + self.drop(self.ffn(self.norm2(x)))
+
+
+class TransformerSelfAttention(dm.WordContextualizer):
+    """__init__(heads=4, layers=1, hidden_size=None, ffn_mult=2, dropout=0.1, positional=True, input_size=None)
+
+    Transformer-encoder Word Contextualizer: pre-norm multi-head self-attention layers
+    with a feed-forward block, sinusoidal position encodings and dropout.
+
+    This is a different module from :class:`SelfAttention` (the original DeepMatcher
+    attention, which has no feed-forward block, no normalization and no positions).
+    Alias strings: ``'transformer'`` and ``'transformer-encoder'``. (The string
+    ``'self-attention'`` keeps meaning the original module so existing code and saved
+    model definitions are unchanged.)
+
+    Padding positions are masked out of the keys using the batch's sequence lengths.
+
+    Args:
+        heads (int): number of attention heads; must divide `hidden_size`.
+        layers (int): number of stacked encoder layers.
+        hidden_size (int): model width. If None, the input size (a linear projection is
+            added when it differs from the input size).
+        ffn_mult (int): feed-forward inner width as a multiple of `hidden_size`.
+        dropout (float): dropout on attention weights, sub-layer outputs and the
+            feed-forward activations; only active in training.
+        positional (bool): add sinusoidal position encodings. Word order matters for
+            names ("Bank of America" vs "America Bank") but is noisy for address
+            fragments, so it can be switched off.
+        input_size (int): set automatically by :class:`LazyModule`.
+    """
+
+    def _init(self, heads=4, layers=1, hidden_size=None, ffn_mult=2, dropout=0.1,
+              positional=True, input_size=None):
+        dim = hidden_size if hidden_size is not None else input_size
+        if dim % heads != 0:
+            raise ValueError('TransformerSelfAttention: hidden size {} is not divisible by '
+                             '{} heads'.format(dim, heads))
+        self.in_proj = nn.Linear(input_size, dim) if dim != input_size else None
+        self.input_norm = nn.LayerNorm(dim)
+        self.blocks = nn.ModuleList(
+            [_PreNormBlock(dim, heads, ffn_mult * dim, dropout) for _ in range(layers)])
+        self.final_norm = nn.LayerNorm(dim)
+        self.drop = nn.Dropout(dropout)
+        self.positional = positional
+        self.dim = dim
+
+    def _forward(self, input_with_meta):
+        x = input_with_meta.data
+        if self.in_proj is not None:
+            x = self.in_proj(x)
+        # Normalize first so token vectors (fastText values are small) and the unit
+        # amplitude position encodings are on a comparable scale.
+        x = self.input_norm(x)
+        if self.positional:
+            x = x + sinusoidal_positions(x.size(1), self.dim, x.device, x.dtype)
+        x = self.drop(x)
+        mask = key_padding_mask(input_with_meta.lengths, x.size(1), x.device)
+        for block in self.blocks:
+            x = block(x, mask)
+        return AttrTensor.from_old_metadata(self.final_norm(x), input_with_meta)

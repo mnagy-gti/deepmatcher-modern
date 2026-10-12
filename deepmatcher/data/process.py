@@ -5,6 +5,7 @@ import os
 from timeit import default_timer as timer
 
 import six
+import torch
 
 from .._torchtext.utils import unicode_csv_reader
 
@@ -14,7 +15,8 @@ from .field import MatchingField
 logger = logging.getLogger(__name__)
 
 
-def _check_header(header, id_attr, left_prefix, right_prefix, label_attr, ignore_columns):
+def _check_header(header, id_attr, left_prefix, right_prefix, label_attr, ignore_columns,
+                  weight_attr=None):
     r"""Verify CSV file header.
 
     Checks that:
@@ -29,7 +31,7 @@ def _check_header(header, id_attr, left_prefix, right_prefix, label_attr, ignore
         assert label_attr in header
 
     for attr in header:
-        if attr not in (id_attr, label_attr) and attr not in ignore_columns:
+        if attr not in (id_attr, label_attr, weight_attr) and attr not in ignore_columns:
             if not attr.startswith(left_prefix) and not attr.startswith(right_prefix):
                 raise ValueError('Attribute ' + attr + ' is not a left or a right table '
                                  'column, not a label or id and is not ignored. Not sure '
@@ -41,7 +43,7 @@ def _check_header(header, id_attr, left_prefix, right_prefix, label_attr, ignore
 
 
 def _make_fields(header, id_attr, label_attr, ignore_columns, lower, tokenize,
-                 include_lengths):
+                 include_lengths, weight_attr=None):
     r"""Create field metadata, i.e., attribute processing specification for each
     attribute.
 
@@ -63,6 +65,10 @@ def _make_fields(header, id_attr, label_attr, ignore_columns, lower, tokenize,
     numeric_field = MatchingField(
         sequential=False, preprocessing=lambda x: int(x), use_vocab=False)
     id_field = MatchingField(sequential=False, use_vocab=False, id=True)
+    # Optional per-example loss weight; float32 so it can multiply the loss directly.
+    weight_field = MatchingField(
+        sequential=False, use_vocab=False, dtype=torch.float32,
+        preprocessing=lambda x: float(x))
 
     fields = []
     for attr in header:
@@ -70,6 +76,8 @@ def _make_fields(header, id_attr, label_attr, ignore_columns, lower, tokenize,
             fields.append((attr, id_field))
         elif attr == label_attr:
             fields.append((attr, numeric_field))
+        elif weight_attr is not None and attr == weight_attr:
+            fields.append((attr, weight_field))
         elif attr in ignore_columns:
             fields.append((attr, None))
         else:
@@ -115,7 +123,8 @@ def process(path,
             left_prefix='left_',
             right_prefix='right_',
             use_magellan_convention=False,
-            pca=True):
+            pca=True,
+            weight_attr='weight'):
     """Creates dataset objects for multiple splits of a dataset.
 
     This involves the following steps (if data cannot be retrieved from the cache):
@@ -186,6 +195,11 @@ def process(path,
             Specifically, set them to be '_id', 'ltable_', and 'rtable_' respectively.
         pca (bool): Whether to compute PCA for each attribute (needed for SIF model).
             Defaults to False.
+        weight_attr (str): Name of an optional numeric column holding a per-example
+            loss weight (used by ``TrainConfig(sample_weights=True)``). It is only read
+            when the column exists in the CSV header; otherwise it is ignored. The
+            column must then be present in every split (it is not used for validation
+            or test scoring). Pass None to treat such a column as an unknown attribute.
 
     Returns:
         Tuple[MatchingDataset]: Datasets for (train, validation, and test) splits in that
@@ -206,9 +220,13 @@ def process(path,
         header = next(unicode_csv_reader(f))
 
     _maybe_download_nltk_data()
-    _check_header(header, id_attr, left_prefix, right_prefix, label_attr, ignore_columns)
+    if weight_attr is not None and (weight_attr not in header
+                                    or weight_attr in ignore_columns):
+        weight_attr = None
+    _check_header(header, id_attr, left_prefix, right_prefix, label_attr, ignore_columns,
+                  weight_attr)
     fields = _make_fields(header, id_attr, label_attr, ignore_columns, lowercase,
-                          tokenize, include_lengths)
+                          tokenize, include_lengths, weight_attr)
 
     column_naming = {
         'id': id_attr,
@@ -216,6 +234,10 @@ def process(path,
         'right': right_prefix,
         'label': label_attr
     }
+    # Only present when the CSV has the column, so caches and checkpoints of
+    # unweighted data are unchanged.
+    if weight_attr is not None:
+        column_naming['weight'] = weight_attr
 
     datasets = MatchingDataset.splits(
         path,
@@ -263,6 +285,7 @@ def process_unlabeled(path, trained_model, ignore_columns=None):
         ignore_columns = train_info.ignore_columns
     column_naming = dict(train_info.column_naming)
     column_naming['label'] = None
+    column_naming.pop('weight', None)  # unlabeled data has no loss weights
 
     fields = _make_fields(header, column_naming['id'], column_naming['label'],
                           ignore_columns, train_info.lowercase, train_info.tokenize,

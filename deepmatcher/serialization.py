@@ -51,7 +51,7 @@ _PLAIN_META_FIELDS = (
     'path', 'column_naming', 'corresponding_field', 'all_left_fields', 'all_right_fields',
     'canonical_text_fields', 'all_text_fields', 'label_field', 'id_field', 'embeddings',
     'embeddings_cache', 'train_pca', 'ignore_columns', 'tokenize', 'lowercase',
-    'include_lengths')
+    'include_lengths', 'weight_field')
 # Fields handled explicitly below.
 _STRUCTURED_META_FIELDS = ('text_fields', 'vocabs', 'orig_metadata', 'init_batch')
 # Checkpoint entries that only matter for resuming training.

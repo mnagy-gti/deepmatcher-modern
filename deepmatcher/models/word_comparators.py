@@ -5,6 +5,7 @@ import six
 import deepmatcher as dm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 
 from . import _utils
@@ -197,4 +198,78 @@ class Attention(dm.WordComparator):
         comparison_merged = self.comparison_merge(inputs_merged, values_merged)
         comparison = self.comparison_network(comparison_merged)
 
+        return AttrTensor.from_old_metadata(comparison, input_with_meta)
+
+
+class MultiHeadCrossAttention(dm.WordComparator):
+    """__init__(heads=4, hidden_size=None, raw_alignment=True, dropout=0.1, comparison_network='2-layer-highway', input_size=None)
+
+    Multi-head cross-attention Word Comparator (alias ``'multi-head-attention'``).
+
+    Like :class:`Attention`, each word of the primary sequence is aligned with the
+    context sequence and compared with what it aligns to; unlike it, alignment is
+    scaled dot-product attention with learned query/key/value projections and several
+    heads, so different heads can align on different cues (token identity, character
+    shape, position). The comparison network sees ``[word, aligned, word * aligned]``.
+
+    Args:
+        heads (int): number of heads; must divide `hidden_size`.
+        hidden_size (int): width of the attention space and of the output. Defaults to
+            the width of the (contextualized) input.
+        raw_alignment (bool): as in :class:`Attention`, compute queries and keys from
+            the raw word embeddings instead of the contextualized ones (values always
+            come from the contextualized context). Default True, like the Hybrid model.
+        dropout (float): dropout on attention weights, training only.
+        comparison_network (string or callable): transform applied to the comparison
+            vector, as in :class:`Attention`.
+        input_size (list): set automatically by :class:`LazyModule`.
+    """
+
+    def _init(self, heads=4, hidden_size=None, raw_alignment=True, dropout=0.1,
+              comparison_network='2-layer-highway', input_size=None):
+        dim = hidden_size if hidden_size is not None else input_size[0]
+        if dim % heads != 0:
+            raise ValueError('MultiHeadCrossAttention: hidden size {} is not divisible by '
+                             '{} heads'.format(dim, heads))
+        query_in = input_size[2] if raw_alignment else input_size[0]
+        key_in = input_size[3] if raw_alignment else input_size[1]
+        self.query = nn.Linear(query_in, dim)
+        self.key = nn.Linear(key_in, dim)
+        self.value = nn.Linear(input_size[1], dim)
+        self.out = nn.Linear(dim, dim)
+        self.input_proj = nn.Linear(input_size[0], dim) if dim != input_size[0] else None
+        self.comparison_network = dm.modules._transform_module(comparison_network, dim)
+        self.heads = heads
+        self.dropout = dropout
+        self.raw_alignment = raw_alignment
+        self.dim = dim
+
+    def _split(self, x):
+        batch, length, _ = x.shape
+        return x.view(batch, length, self.heads, self.dim // self.heads).transpose(1, 2)
+
+    def _forward(self,
+                 input_with_meta,
+                 context_with_meta,
+                 raw_input_with_meta=None,
+                 raw_context_with_meta=None):
+        input, context = input_with_meta.data, context_with_meta.data
+        queries, keys = input, context
+        if self.raw_alignment:
+            queries, keys = raw_input_with_meta.data, raw_context_with_meta.data
+
+        mask = None
+        if context_with_meta.lengths is not None:
+            from .word_contextualizers import key_padding_mask
+            mask = key_padding_mask(context_with_meta.lengths, context.size(1),
+                                    context.device)[:, None, None, :]
+        aligned = F.scaled_dot_product_attention(
+            self._split(self.query(queries)), self._split(self.key(keys)),
+            self._split(self.value(context)), attn_mask=mask,
+            dropout_p=self.dropout if self.training else 0.0)
+        batch, _, length, _ = aligned.shape
+        aligned = self.out(aligned.transpose(1, 2).reshape(batch, length, self.dim))
+
+        own = self.input_proj(input) if self.input_proj is not None else input
+        comparison = self.comparison_network(torch.cat([own, aligned, own * aligned], dim=2))
         return AttrTensor.from_old_metadata(comparison, input_with_meta)

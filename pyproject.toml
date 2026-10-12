@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deepmatcher-modern"
-version = "0.2.0"
+version = "0.3.0"
 description = "DeepMatcher entity matching, ported to current PyTorch (CUDA / Apple Metal / CPU), with safetensors model files and reduced-precision inference"
 readme = "README.md"
 license = "BSD-3-Clause"

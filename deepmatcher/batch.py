@@ -94,6 +94,8 @@ class MatchingBatch(object):
                     AttrTensor(
                         name=name, attr=getattr(input, name),
                         train_info=train_info))
-        for name in [train_info.label_field, train_info.id_field]:
+        # `weight_field` is absent on metadata of models saved before weights existed.
+        for name in [train_info.label_field, train_info.id_field,
+                     getattr(train_info, 'weight_field', None)]:
             if name is not None and hasattr(input, name):
                 setattr(self, name, getattr(input, name))
